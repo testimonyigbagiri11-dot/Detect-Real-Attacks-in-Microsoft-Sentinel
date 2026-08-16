@@ -1,5 +1,3 @@
-Detection and Response Report | Microsoft Sentinel
-
 # Detection and Response Report: SSH Authentication Attacks in Microsoft Sentinel
 
 ## 1. Executive Summary
