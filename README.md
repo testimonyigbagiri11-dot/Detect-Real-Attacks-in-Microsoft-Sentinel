@@ -1,561 +1,296 @@
-# Detection and Response Report: SSH Authentication Attacks in Microsoft Sentinel
+# Microsoft Sentinel SOC Detection and Triage Lab
 
-## 1. Executive Summary
+> End-to-end SOC investigation using Microsoft Sentinel, Azure Log Analytics and KQL, covering log ingestion, threat hunting, scheduled detection, incident triage, MITRE ATT&CK mapping and reporting.
 
-This lab used Microsoft Sentinel to analyse 292 SSH authentication log records from a fictional banking server. I created KQL threat-hunting queries and a scheduled analytics rule that detected source IP addresses generating more than five failed SSH login attempts within a 10-minute window.
+## Project Summary
 
-The detection generated three primary incidents:
+I deployed Microsoft Sentinel, ingested 292 controlled SSH authentication events and developed nine KQL hunting and investigation queries.
 
-* A confirmed SSH brute-force compromise from `203.0.113.77`, followed by access to `/etc/shadow`.
-* A password-spray attempt from `198.51.100.23` targeting 11 different accounts without a successful login.
-* Benign automated activity from internal IP `10.20.14.9`, caused by a backup service repeatedly using outdated credentials.
+I converted the detection logic into a scheduled analytics rule and investigated three resulting incidents:
 
-The investigation demonstrated that alert volume alone does not determine severity. The source with the most failed attempts was benign, while a lower-volume source successfully compromised an account.
+- Confirmed SSH account compromise
+- Password-spray attempt
+- Benign automated backup failure
 
-## 2. Environment and Scope
+The project demonstrates that alert volume alone does not determine severity: the highest-volume source was benign, while a lower-volume source successfully compromised an account.
 
-This project was completed in an authorised lab environment using a fictional banking scenario and a controlled SSH authentication dataset.
+## Quick Links
 
-### Technologies Used
+- [View KQL Queries](queries/)
+- [Read the Detection and Response Report](report/detection-and-response-report.md)
+- [View Investigation Evidence](screenshots/)
+- [View the Sentinel Workbook](#sentinel-workbook)
 
-* Microsoft Azure
-* Microsoft Sentinel
-* Azure Log Analytics
-* Kusto Query Language (KQL)
-* Sentinel scheduled analytics rules
-* Sentinel incident management
-* Sentinel Workbooks
+## Key Outcomes
 
-### Data Scope
+The detection identified three suspicious source IP addresses:
 
-The dataset contained 291 fictional server log records representing approximately 48 hours of SSH authentication and system activity. An additional test record was ingested while validating the data pipeline, resulting in 292 records in the Sentinel custom table.
+| Source IP | Activity | Verdict |
+|---|---|---|
+| `203.0.113.77` | Repeated failures followed by a successful SSH login and access to `/etc/shadow` | True Positive — Confirmed compromise |
+| `198.51.100.23` | One external source targeting 11 different accounts | True Positive — Password-spray attempt |
+| `10.20.14.9` | Internal backup service retrying an outdated password every 60 seconds | Benign Positive — Misconfigured backup job |
 
-The logs were stored in the following custom Log Analytics table:
+## Tools and Skills
 
-`MeridianLogs_CL`
+**SIEM and Cloud**
+- Microsoft Sentinel
+- Azure Log Analytics
+- Azure Monitor Logs Ingestion API
+- Data Collection Endpoints and Data Collection Rules
 
-The investigation focused on identifying:
+**Detection and Investigation**
+- Kusto Query Language
+- Threat hunting
+- Scheduled analytics rules
+- Entity mapping and alert grouping
+- Incident triage and classification
+- Detection tuning
+- MITRE ATT&CK mapping
 
-* Concentrated SSH authentication failures
-* Successful authentication following repeated failures
-* Post-compromise activity
-* Password spraying across multiple accounts
-* Benign automated activity that resembled an attack
+**Reporting and Visualisation**
+- Microsoft Sentinel Workbooks
+- Evidence-based incident reporting
+- Remediation recommendations
+- Azure resource cleanup
 
-### Lab Architecture
+**Supporting Tools**
+- PowerShell
+- Azure Cloud Shell
+- Git and GitHub
 
-The workflow used in this project was:
+## Architecture and Workflow
 
-`Log ingestion → KQL analysis → Scheduled detection → Sentinel incidents → Triage and classification → Dashboard visualisation`
+The project followed the complete SOC lifecycle:
 
-The original legacy ingestion method did not successfully populate the custom table. I therefore migrated the table to Data Collection Rule-based ingestion and used a Data Collection Endpoint and the Azure Logs Ingestion API to load the dataset successfully.
-
-## 3. Detection
-
-### Analytics Rule
-
-* **Rule name:** Brute Force - Multiple Failed SSH Logins
-* **Rule type:** Scheduled query rule
-* **Severity:** Medium
-* **Query frequency:** Every 5 minutes
-* **Lookup period:** Previous 1 hour
-* **Alert threshold:** Generate an alert when the query returns more than 0 results
-* **Entity mapping:** `SourceIP` mapped as an IP address entity
-* **Incident creation:** Enabled
-* **Alert grouping:** Alerts with matching IP entities grouped into the same incident
-
-### Detection Logic
-
-The analytics rule identified source IP addresses generating more than five failed SSH authentication attempts within a 10-minute period.
-
-```kql
-MeridianLogs_CL
-| where RawData has "Failed password"
-| extend SourceIP = extract(@"from ([0-9.]+)", 1, RawData)
-| where isnotempty(SourceIP)
-| summarize FailedAttempts = count()
-    by SourceIP, bin(TimeGenerated, 10m)
-| where FailedAttempts > 5
+```mermaid
+flowchart LR
+    A[SSH Authentication Logs] --> B[Azure Logs Ingestion API]
+    B --> C[Data Collection Endpoint]
+    C --> D[Data Collection Rule]
+    D --> E[Log Analytics Workspace]
+    E --> F[Microsoft Sentinel]
+    F --> G[KQL Threat Hunting]
+    G --> H[Scheduled Analytics Rule]
+    H --> I[Sentinel Incidents]
+    I --> J[Investigation and Triage]
+    J --> K[Classification and Closure]
+    K --> L[Workbook Dashboard and Report]
 ```
 
-### Query Explanation
-
-1. `where RawData has "Failed password"` filters the dataset to failed SSH authentication events.
-2. `extract()` retrieves the source IP address from each raw log entry.
-3. `isnotempty()` removes records where an IP address could not be extracted.
-4. `summarize` counts failed attempts from each source IP within 10-minute windows.
-5. `where FailedAttempts > 5` applies the detection threshold.
-
-Any result returned by the query represents an IP address that exceeded the configured threshold and therefore causes the analytics rule to generate an alert.
-
-### Detection Results
-
-The rule identified three source IP addresses for investigation:
-
-`10.20.14.9``203.0.113.77``opsadmin``198.51.100.23`
-
-| Source IP | Failed attempts | Initial observation |
-| --- | --- | --- |
-| 30 | Highest-volume source; internal address |
-| 14 | External source targeting |
-| 11 | External source targeting multiple accounts |
-
-The result count alone was not enough to determine severity. Each source required further investigation to establish whether the activity represented a compromise, an attempted attack or benign behaviour.
-
-## 4. Incident Triage
-
-Each incident was assigned, investigated using KQL, classified based on evidence, documented with an investigation comment and closed in Microsoft Sentinel.
-
-### 4.1 Confirmed SSH Compromise
-
-* **Source IP:** `203.0.113.77`
-* **Source type:** External
-* **Account:** `opsadmin`
-* **Host:** `mtb-app01`
-* **Failed attempts:** 14
-* **Successful authentication:** Yes
-* **Verdict:** True Positive — Confirmed compromise
-* **Sentinel classification:** True Positive — Suspicious activity
-
-#### Timeline and Evidence
-
-The source IP generated 14 failed SSH authentication attempts against the `opsadmin` account within approximately 90 seconds. The failed attempts were followed by an `Accepted password` event from the same source IP.
-
-Further investigation identified post-compromise activity:
-
-```text
-sudo cat /etc/shadow
-```
-
-The compromised `opsadmin` account used `sudo` to execute the command as `root`. The `/etc/shadow` file contains local Linux password hashes, so this activity indicated that the attacker progressed beyond authentication and attempted to access sensitive credential data.
-
-#### Analyst Decision
-
-This incident was classified as a confirmed compromise because:
-
-1. Multiple failed logins were followed by a successful authentication.
-2. The successful login came from the same external source IP.
-3. Sensitive post-authentication activity occurred shortly afterward.
-4. The attacker attempted to access the system password-hash file.
-
-#### Recommended Response
-
-* Disable or reset the compromised `opsadmin` account.
-* Isolate `mtb-app01` for forensic investigation.
-* Block `203.0.113.77`.
-* Review all commands and processes executed after authentication.
-* Search for persistence mechanisms or additional compromised accounts.
-* Rotate credentials that may have been exposed.
-
-### 4.2 Password-Spray Attempt
-
-* **Source IP:** `198.51.100.23`
-* **Source type:** External
-* **Accounts targeted:** 11 different usernames
-* **Host:** `mtb-app01`
-* **Failed attempts:** 11
-* **Successful authentication:** No
-* **Verdict:** True Positive — Attempted password spray
-* **Sentinel classification:** True Positive — Suspicious activity
-
-#### Timeline and Evidence
-
-The source IP attempted SSH authentication against 11 different usernames. The activity consisted of approximately one failed attempt per account, and no successful authentication was recorded.
-
-This pattern differed from traditional brute force:
-
-* **Brute force:** Many passwords attempted against one account.
-* **Password spray:** One or a small number of likely passwords attempted across many accounts.
-
-The distribution of attempts across multiple usernames was consistent with an attacker trying to avoid account lockout thresholds and remain below simple per-account detection limits.
-
-#### Analyst Decision
-
-This incident was classified as a true-positive attempted attack because:
-
-1. A single external IP targeted many accounts.
-2. Attempts were distributed rather than concentrated on one account.
-3. Every authentication attempt failed.
-4. The activity matched the behavioural pattern of password spraying.
-
-There was no evidence that the attacker successfully accessed an account.
-
-#### Recommended Response
-
-* Block or monitor `198.51.100.23`.
-* Review the targeted accounts for further authentication activity.
-* Enforce multifactor authentication.
-* Identify accounts using weak or reused passwords.
-* Create a companion detection that counts unique accounts targeted by one IP.
-* Monitor for the source IP returning through other services.
-
-### 4.3 Benign Backup-Service Activity
-
-* **Source IP:** `10.20.14.9`
-* **Source type:** Internal
-* **Account:** `svc-backup`
-* **Host:** `mtb-app01`
-* **Failed attempts:** 30
-* **Successful authentication:** No
-* **Average interval:** 60 seconds
-* **Verdict:** Benign Positive — Misconfigured automated process
-* **Sentinel classification:** Benign Positive — Suspicious but expected
-
-#### Timeline and Evidence
-
-This source generated the highest number of failed authentication attempts in the dataset. However, the investigation showed:
-
-* All 30 attempts targeted only the `svc-backup` service account.
-* All attempts failed.
-* No successful authentication occurred.
-* Attempts repeated at a consistent 60-second interval.
-* The source was an internal IP address.
-
-The regular interval and single service-account target were more consistent with an automated backup process repeatedly using an outdated stored password than with interactive attacker behaviour.
-
-#### Analyst Decision
-
-The incident was classified as benign because:
-
-1. The source was internal.
-2. Only one service account was targeted.
-3. No successful authentication occurred.
-4. The activity repeated at an exact automated interval.
-5. The evidence supported a stale credential in a scheduled backup job.
-
-This incident demonstrated that the loudest alert was not the most severe. Alert volume alone was insufficient to determine risk.
-
-#### Recommended Response
-
-* Update the stored credentials used by the backup process.
-* Confirm that the backup job operates successfully after the change.
-* Review the service account’s permissions.
-* Ensure the service account follows least privilege.
-* Consider suppressing or tuning alerts for known automated behaviour only after the cause has been verified.
-
-## 5. MITRE ATT&CK Mapping
-
-The confirmed malicious activity was mapped to the following MITRE ATT&CK techniques.
-
-`T1110``203.0.113.77``opsadmin``T1110.003``198.51.100.23``T1078``opsadmin``T1003.008``/etc/passwd``/etc/shadow``sudo``/usr/bin/cat /etc/shadow`
-
-| Technique | Name | Evidence from the Investigation |
-| --- | --- | --- |
-| Brute Force | External IP | generated repeated failed SSH authentication attempts against the | account before successfully authenticating. |
-| Brute Force: Password Spraying | External IP | attempted authentication against 11 different usernames, with approximately one failed attempt per account. |
-| Valid Accounts | The attacker successfully authenticated as | after the repeated failed login attempts. |
-| OS Credential Dumping: | and | Following the successful login, the compromised account used | to execute | , indicating an attempt to access stored Linux password hashes. |
-
-### Technique Analysis
-
-#### T1110 — Brute Force
-
-The repeated failed SSH authentication attempts against `opsadmin` were consistent with brute-force password guessing. The successful login following the failures confirmed that the attacker obtained working credentials.
-
-#### T1110.003 — Password Spraying
-
-The activity from `198.51.100.23` was distributed across 11 different accounts instead of repeatedly targeting one username. This pattern was consistent with password spraying, which attempts one or a small number of likely passwords against many accounts.
-
-#### T1078 — Valid Accounts
-
-After obtaining the correct password, the attacker authenticated using the legitimate `opsadmin` account. The activity therefore progressed from attempted credential access to the use of valid account credentials.
-
-#### T1003.008 — `/etc/passwd` and `/etc/shadow`
-
-The attacker used elevated privileges to read `/etc/shadow`. This file contains Linux password hashes and could be collected for offline password cracking or further credential compromise.
-
-### Benign Incident
-
-The activity from internal IP `10.20.14.9` was not assigned a MITRE ATT&CK technique because the investigation concluded that it originated from a misconfigured backup job rather than adversary behaviour.
-
-## 6. Remediation
-
-The following actions are recommended based on the evidence collected during the three incident investigations.
-
-### 6.1 Confirmed SSH Compromise
-
-For the compromise involving `203.0.113.77` and the `opsadmin` account:
-
-1. Immediately disable or reset the compromised `opsadmin` account.
-2. Revoke any active sessions or authentication tokens associated with the account.
-3. Isolate `mtb-app01` from the network for forensic investigation.
-4. Block `203.0.113.77` at the firewall or other relevant security controls.
-5. Review all commands, processes, files and network connections created after the successful login.
-6. Investigate whether persistence mechanisms, additional accounts or scheduled tasks were created.
-7. Rotate any credentials that may have been exposed through access to `/etc/shadow`.
-8. Review privileged access assigned to `opsadmin` and apply least privilege.
-9. Enforce multifactor authentication where supported.
-10. Monitor the environment for further activity from the same IP address, account or host.
-
-### 6.2 Password-Spray Attempt
-
-For the password-spray activity from `198.51.100.23`:
-
-1. Block or closely monitor the source IP address.
-2. Review the 11 targeted accounts for later successful authentications or unusual activity.
-3. Require password resets for accounts believed to use weak or reused passwords.
-4. Enforce multifactor authentication for remote and privileged access.
-5. Apply account-lockout or authentication-throttling controls carefully to reduce password spraying without causing denial of service.
-6. Disable unused, test or default accounts.
-7. Create an additional detection rule that counts the number of unique accounts targeted by one source IP.
-8. Monitor for the same source targeting other services such as VPN, email or cloud authentication.
-9. Review password policy requirements and user awareness guidance.
-
-### 6.3 Benign Backup-Service Activity
-
-For the internal backup activity from `10.20.14.9`:
-
-1. Update the stored password used by the backup job.
-2. Confirm that the `svc-backup` account can authenticate successfully after the credential is corrected.
-3. Verify that scheduled backups complete successfully.
-4. Review the service account’s permissions and remove unnecessary privileges.
-5. Store the service credential securely rather than embedding it in scripts or configuration files.
-6. Document the expected source IP, account and authentication pattern.
-7. Tune or suppress alerts for this known behaviour only after the root cause has been corrected and verified.
-8. Continue monitoring the service account for deviations from its normal pattern.
-
-### 6.4 Wider Security Improvements
-
-The investigations also support the following broader improvements:
-
-* Centralise SSH authentication logs in the SIEM through continuous data connectors.
-* Restrict direct SSH access from untrusted networks.
-* Use key-based authentication where appropriate.
-* Disable password-based SSH authentication for privileged accounts where operationally possible.
-* Apply network segmentation to sensitive servers.
-* Maintain an inventory of service accounts and their owners.
-* Regularly review privileged and inactive accounts.
-* Create detections for successful authentication following repeated failures.
-* Create companion detections for low-and-slow attacks over longer time windows.
-* Establish incident-response procedures for account compromise and credential exposure.
-
-Each remediation action is tied to evidence observed during the investigation rather than being applied only because an alert fired.
-
-## 7. Detection Limitations
-
-The analytics rule successfully detected concentrated bursts of failed SSH authentication, but it has several limitations that would need to be addressed in a production environment.
-
-### 7.1 Low-and-Slow Attacks
-
-The rule triggers only when a source IP generates more than five failed attempts within a 10-minute window:
-
-```kql
-| summarize FailedAttempts = count()
-    by SourceIP, bin(TimeGenerated, 10m)
-| where FailedAttempts > 5
-```
-
-An attacker who performs fewer attempts over a longer period could remain below this threshold.
-
-A companion rule should therefore analyse longer time windows, such as several hours or one day, while looking for:
-
-* Repeated failures from the same source IP
-* One IP targeting many different accounts
-* One account being targeted from multiple IP addresses
-* Successful authentication following earlier failures
-
-### 7.2 Threshold Tuning
-
-The threshold of more than five failures was suitable for this controlled dataset, but it would require tuning against normal activity in a real organisation.
-
-* A threshold that is too low may generate excessive false positives.
-* A threshold that is too high may allow attacks to go undetected.
-* Different systems, accounts and network zones may require different thresholds.
-
-Historical authentication data should be reviewed before applying the same threshold in production.
-
-### 7.3 Legitimate Automated Activity
-
-The rule detected the internal backup job because it repeatedly used an outdated password. The detection logic could not independently determine whether the source was malicious or benign.
-
-This demonstrates that detection is only the beginning of the process. Analysts must consider:
-
-* Whether the source is internal or external
-* Which account is being targeted
-* Whether authentication succeeded
-* Timing and repetition patterns
-* Whether the activity matches a known service or scheduled process
-
-Known benign activity should only be excluded after its purpose, owner and expected behaviour have been verified.
-
-### 7.4 IP-Based Detection
-
-The rule grouped activity by source IP address. This creates several potential blind spots:
-
-* Multiple attackers may appear behind the same proxy or network address translation gateway.
-* One attacker may rotate between many IP addresses.
-* Compromised internal systems may generate activity from trusted address ranges.
-* Cloud-hosted and shared infrastructure may use changing source addresses.
-
-IP information should therefore be combined with account, host, device and behavioural context.
-
-### 7.5 Limited Log Sources
-
-The project used SSH authentication and system logs from one fictional Linux server. A production investigation would require additional telemetry, including:
-
-* Firewall and network logs
-* Endpoint detection and response data
-* Identity-provider authentication logs
-* Privileged-access logs
-* Process execution events
-* DNS and proxy records
-* Cloud audit logs
-
-Without these additional sources, the investigation may not reveal the attacker’s complete activity before or after authentication.
-
-### 7.6 Successful Login Detection
-
-The scheduled rule focused on failed authentication volume. It did not directly alert when repeated failures were followed by a successful login.
-
-A higher-priority companion rule should correlate:
-
-1. Multiple failed login attempts
-2. A successful login from the same source IP
-3. Activity involving the same account and host
-4. Sensitive commands or privilege escalation after authentication
-
-This would identify confirmed compromise more directly than a failed-login count alone.
-
-### 7.7 Static Dataset and Duplicate Incidents
-
-The lab used a static imported dataset while the analytics rule ran every five minutes over the previous hour. Because the same records remained inside the lookup period, the rule continued generating alerts after the original incidents had been investigated.
-
-Matching alerts were grouped by source IP, but additional incidents were eventually generated after the original incidents were closed. The rule was disabled, and the duplicate cases were documented and closed.
-
-In production, this could be improved through:
-
-* Alert suppression
-* Reopening matching incidents when appropriate
-* More precise event-time logic
-* Deduplication based on source, account and event identifiers
-* Automation rules that manage repeated alerts
-* Query logic that excludes previously processed events
-
-### 7.8 Lab Ingestion Method
-
-The original legacy ingestion method returned successful HTTP responses but did not populate the custom table. The table was migrated to Data Collection Rule-based ingestion, and the Azure Logs Ingestion API was then used successfully.
-
-In production, logs should arrive continuously through supported data connectors or a properly managed ingestion pipeline rather than through a one-time manual upload.
-
-### Overall Limitation
-
-The rule was effective at identifying obvious bursts of failed SSH authentication, but it should be treated as one layer of detection rather than a complete defence.
-
-Reliable detection requires multiple complementary rules, broader telemetry, baseline tuning and evidence-based analyst triage.
-
-## 8. Lessons Learned
-
-This project demonstrated that effective SOC work requires more than identifying the highest alert count.
-
-### 8.1 Alert Volume Does Not Equal Severity
-
-The internal backup service generated 30 failed attempts, the highest number in the dataset, but investigation showed that it was benign automated activity.
-
-The confirmed compromise generated fewer failures but resulted in:
-
-* A successful SSH login
-* Use of a valid privileged account
-* Access to `/etc/shadow`
-* Potential exposure of password hashes
-
-This reinforced the importance of investigating context, authentication outcomes and post-login behaviour rather than prioritising incidents only by volume.
-
-### 8.2 Detection and Triage Are Different Skills
-
-The analytics rule successfully identified suspicious authentication patterns, but the rule alone could not determine whether each result was malicious.
-
-The analyst still needed to establish:
-
-* Whether the source was internal or external
-* Which accounts were targeted
-* Whether authentication succeeded
-* Whether activity followed a human or automated pattern
-* What occurred after authentication
-* Whether the evidence supported escalation or closure
-
-Detection creates the case. Triage determines what the case means.
-
-### 8.3 Evidence-Based Closure Is Essential
-
-Each incident was closed with a classification and a written explanation supported by log evidence.
-
-Examples included:
-
-* Confirming compromise through failed attempts followed by a successful login
-* Identifying password spraying through one source targeting many usernames
-* Clearing benign activity through a regular 60-second retry pattern and zero successful logins
-
-A closing statement should explain why the incident received its classification rather than simply stating that it looked safe or malicious.
-
-### 8.4 KQL Supports the Full Investigation Workflow
-
-KQL was used to:
-
-* Inspect the raw dataset
-* Filter failed authentication events
-* Extract source IP addresses and usernames
-* Count and rank failed attempts
-* Build time-based detection logic
-* Reconstruct authentication timelines
-* Identify successful compromise
-* Search for post-compromise activity
-* Calculate intervals between automated login attempts
-* Create workbook visualisations
-
-This demonstrated how the same query language supports threat hunting, detection engineering, incident investigation and reporting.
-
-### 8.5 Detection Rules Require Tuning
-
-The scheduled rule continued querying the same static dataset and produced duplicate alerts after the original incidents were closed.
-
-This showed that production detections require:
-
-* Suitable thresholds
-* Appropriate lookup periods
-* Alert grouping
-* Suppression or deduplication
-* Companion detections
-* Ongoing review of false positives and missed behaviour
-
-A detection rule is not complete when it first fires successfully. It must be monitored and improved.
-
-### 8.6 Troubleshooting Is Part of Security Engineering
-
-The original legacy ingestion method returned successful HTTP responses but did not populate the Log Analytics table.
-
-To resolve this, I:
-
-1. Confirmed the workspace ID and destination table.
-2. Verified that the custom table was provisioned successfully.
-3. Tested the ingestion path using a single controlled record.
+### Workflow
+
+1. **Ingest** — Loaded the controlled SSH dataset into the custom `MeridianLogs_CL` table.
+2. **Inspect** — Reviewed the raw fields and original authentication events.
+3. **Hunt** — Used KQL to extract source IP addresses, usernames and authentication outcomes.
+4. **Detect** — Created a scheduled rule for sources generating more than five failed SSH logins within a 10-minute window.
+5. **Alert** — Mapped source IPs as entities and generated separate Sentinel incidents.
+6. **Triage** — Investigated each incident to determine whether authentication succeeded and what occurred afterward.
+7. **Classify** — Closed two incidents as true positives and one as a benign positive.
+8. **Visualise** — Built a Sentinel workbook showing failed logins over time and the top source IPs.
+9. **Report** — Documented the evidence, MITRE ATT&CK mappings, remediation and detection limitations.
+10. **Clean up** — Deleted the Azure resource group after preserving the project evidence.
+
+## What I Built
+
+- A Microsoft Sentinel deployment connected to an Azure Log Analytics workspace
+- A custom Log Analytics table containing SSH authentication activity
+- A Data Collection Endpoint and Data Collection Rule
+- Nine documented KQL threat-hunting and investigation queries
+- A scheduled brute-force analytics rule
+- IP entity mapping and alert grouping
+- Three fully investigated Sentinel incidents
+- A workbook dashboard for authentication monitoring
+- A detailed detection-and-response report
+- A redacted evidence set for portfolio publication
+
+## Data Ingestion Troubleshooting
+
+The original legacy ingestion script returned successful HTTP responses but did not populate the custom table.
+
+To resolve the issue, I:
+
+1. Verified the workspace ID and destination table.
+2. Confirmed that the custom table was provisioned successfully.
+3. Tested ingestion with a single controlled record.
 4. Migrated the table from classic ingestion to Data Collection Rule-based ingestion.
 5. Created a Data Collection Endpoint and Data Collection Rule.
 6. Assigned the required Azure role.
 7. Authenticated to the Azure Monitor API.
-8. Successfully ingested the complete dataset through the Logs Ingestion API.
+8. Successfully ingested the dataset using the current Logs Ingestion API.
 
-This troubleshooting process provided practical experience with Azure permissions, authentication, ingestion pipelines and validation.
+This troubleshooting provided practical experience with Azure authentication, permissions, custom tables and modern log-ingestion pipelines.
 
-### 8.7 Responsible Cloud Cleanup Matters
+## Detection Evidence
 
-After saving the KQL, screenshots, report and workbook evidence, the Azure resource group was deleted.
+### Suspicious Sources Identified
 
-This removed:
+The first hunting query grouped failed SSH authentication attempts by source IP. Three sources stood out significantly above the normal background activity.
 
-* Microsoft Sentinel
-* The Log Analytics workspace
-* The custom table and ingested logs
-* Analytics rules and incidents
-* The workbook
-* The Data Collection Endpoint
-* The Data Collection Rule
+![Failed logins by source IP](screenshots/04-failed-logins-by-source-ip.png)
 
-Deleting unused cloud resources reduced unnecessary cost and removed unneeded attack surface.
+### Scheduled Analytics Rule
 
-## Conclusion
+The hunting logic was converted into an enabled Microsoft Sentinel scheduled analytics rule with Medium severity.
 
-The project completed the full SOC workflow:
+![Enabled Sentinel analytics rule](screenshots/06-analytics-rule-enabled.png)
 
-`Ingest → Query → Detect → Investigate → Classify → Respond → Report → Clean up`
+### Incidents Generated
 
-The most important lesson was that identifying suspicious activity is only the first step. A SOC analyst must evaluate the evidence, distinguish malicious behaviour from benign noise, document the reasoning and recommend an appropriate response.
+The rule generated separate incidents for the three suspicious source IP addresses.
+
+![Sentinel incidents generated](screenshots/07-sentinel-incidents-generated.png)
+
+### Confirmed Account Compromise
+
+Investigation of `203.0.113.77` showed repeated failed authentication attempts followed by a successful SSH login to the `opsadmin` account.
+
+![Failed attempts followed by successful login](screenshots/09-confirmed-compromise-success-login.png)
+
+The investigation also identified post-compromise access to the Linux password-hash file.
+
+![Post-compromise access to shadow file](screenshots/10-post-compromise-shadow-file-access.png)
+
+### Password-Spray Attempt
+
+The source `198.51.100.23` attempted authentication against 11 different usernames, with no successful login.
+
+![Password-spray evidence](screenshots/13-password-spray-evidence.png)
+
+### Benign Backup-Service Activity
+
+The internal source `10.20.14.9` generated 30 failed attempts against `svc-backup`, with no successful authentication and an exact 60-second interval between attempts.
+
+![Benign backup-job evidence](screenshots/16-benign-backup-job-evidence.png)
+
+### Completed Incident Queue
+
+All primary incidents were investigated, classified, documented and closed.
+
+![Completed incident queue](screenshots/18-incidents-triaged-and-closed.png)
+
+### Sentinel Workbook
+
+A custom workbook was created to visualise failed SSH logins over time and rank the top source IP addresses.
+
+![Sentinel authentication dashboard](screenshots/19-sentinel-workbook-dashboard.png)
+
+## KQL Queries
+
+The complete KQL used during the project is available in the [`queries`](queries/) directory.
+
+| File | Purpose |
+|---|---|
+| [`01-raw-log-inspection.kql`](queries/01-raw-log-inspection.kql) | Inspect the custom table structure and sample raw events |
+| [`02-failed-logins-by-ip.kql`](queries/02-failed-logins-by-ip.kql) | Count and rank failed logins by source IP |
+| [`03-brute-force-detection.kql`](queries/03-brute-force-detection.kql) | Detect more than five failures within a 10-minute window |
+| [`04-confirmed-compromise-investigation.kql`](queries/04-confirmed-compromise-investigation.kql) | Reconstruct failures followed by successful authentication |
+| [`05-post-compromise-shadow-access.kql`](queries/05-post-compromise-shadow-access.kql) | Identify access to `/etc/shadow` |
+| [`06-password-spray-investigation.kql`](queries/06-password-spray-investigation.kql) | Extract usernames targeted by the password spray |
+| [`07-benign-backup-investigation.kql`](queries/07-benign-backup-investigation.kql) | Summarise the automated backup retry pattern |
+| [`08-failed-logins-over-time.kql`](queries/08-failed-logins-over-time.kql) | Power the workbook authentication timeline |
+| [`09-top-source-ips.kql`](queries/09-top-source-ips.kql) | Power the workbook source-IP ranking |
+
+## Investigation Report
+
+The full detection-and-response report contains the incident evidence, analyst decisions, MITRE ATT&CK mapping, remediation recommendations, detection limitations and lessons learned.
+
+[Read the full Detection and Response Report](report/detection-and-response-report.md)
+
+## MITRE ATT&CK Mapping
+
+| Technique | Name | Project Evidence |
+|---|---|---|
+| `T1110` | Brute Force | Repeated failed SSH logins against the `opsadmin` account |
+| `T1110.003` | Password Spraying | One external IP attempted authentication against 11 different usernames |
+| `T1078` | Valid Accounts | The attacker successfully authenticated using the `opsadmin` account |
+| `T1003.008` | OS Credential Dumping: `/etc/passwd` and `/etc/shadow` | The compromised account accessed `/etc/shadow` after authentication |
+
+## Detection Limitations
+
+The scheduled analytics rule was effective at identifying concentrated failed-login activity, but it has several limitations:
+
+- Low-and-slow attacks may remain below the threshold of more than five failures within 10 minutes.
+- IP-based grouping may miss attackers who rotate source addresses.
+- Shared proxies or NAT gateways may cause multiple systems to appear under one source IP.
+- The rule does not independently determine whether activity is malicious or benign.
+- The rule does not directly correlate failed attempts with a later successful login.
+- The lab used a static imported dataset rather than a continuous production data connector.
+- Repeated evaluation of the same static records generated duplicate incidents.
+- The available telemetry was limited to one fictional Linux server.
+
+A production implementation should combine this rule with identity, endpoint, firewall, network and cloud audit logs.
+
+## What I Would Improve in Production
+
+- Create a higher-severity rule for repeated failures followed by successful authentication.
+- Add a password-spray rule based on the number of unique accounts targeted by one source.
+- Add a low-and-slow detection using a longer analysis period.
+- Tune thresholds using historical authentication baselines.
+- Use continuous data connectors instead of manual log ingestion.
+- Add alert suppression and deduplication.
+- Correlate authentication events with process-execution and endpoint telemetry.
+- Enrich source IP entities with threat-intelligence information.
+- Automate containment actions only after appropriate validation.
+- Track detection performance using false-positive and false-negative reviews.
+
+## Repository Structure
+
+```text
+microsoft-sentinel-soc-lab/
+├── README.md
+├── .gitignore
+├── queries/
+│   ├── 01-raw-log-inspection.kql
+│   ├── 02-failed-logins-by-ip.kql
+│   ├── 03-brute-force-detection.kql
+│   ├── 04-confirmed-compromise-investigation.kql
+│   ├── 05-post-compromise-shadow-access.kql
+│   ├── 06-password-spray-investigation.kql
+│   ├── 07-benign-backup-investigation.kql
+│   ├── 08-failed-logins-over-time.kql
+│   └── 09-top-source-ips.kql
+├── report/
+│   └── detection-and-response-report.md
+└── screenshots/
+    ├── 01-sentinel-enabled.png
+    ├── 02-log-ingestion-confirmed.png
+    ├── 03-raw-log-sample.png
+    ├── 04-failed-logins-by-source-ip.png
+    ├── 06-analytics-rule-enabled.png
+    ├── 07-sentinel-incidents-generated.png
+    ├── 08-incident-details-confirmed-compromise.png
+    ├── 09-confirmed-compromise-success-login.png
+    ├── 10-post-compromise-shadow-file-access.png
+    ├── 11-confirmed-compromise-closed.png
+    ├── 13-password-spray-evidence.png
+    ├── 14-password-spray-closed.png
+    ├── 15-incident-details-benign-backup.png
+    ├── 16-benign-backup-job-evidence.png
+    ├── 17-benign-backup-incident-closed.png
+    ├── 18-incidents-triaged-and-closed.png
+    ├── 19-sentinel-workbook-dashboard.png
+    └── 20-resource-group-deleted.png
+```
+
+## Responsible Use and Attribution
+
+This project was completed in an authorised lab environment using a fictional banking scenario and controlled training data.
+
+The original scenario and sample dataset were supplied through the MyFirstHack Mentorship Weekly Project 05 material. The Azure deployment, ingestion troubleshooting, KQL analysis, detection configuration, incident investigation, written report and redacted screenshots were completed as part of my own lab work.
+
+The original dataset, training guide, ingestion scripts, credentials and unredacted evidence are not included in this repository.
+
+## Cloud Cleanup
+
+After preserving the required project evidence, the Azure resource group was deleted.
+
+![Azure resource group deleted](screenshots/20-resource-group-deleted.png)
+
+This removed the Sentinel deployment, Log Analytics workspace, custom table, analytics rule, incidents, workbook, Data Collection Endpoint and Data Collection Rule.
+
+## Key Takeaway
+
+The most important lesson from this project was that alert volume does not equal severity.
+
+The highest-volume source was a benign backup process, while a lower-volume source successfully compromised an account and accessed sensitive credential data. Effective SOC analysis therefore requires evidence-based investigation, contextual reasoning and clear documentation rather than relying only on alert counts.
