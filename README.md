@@ -85,16 +85,16 @@ li { margin:.35em 0; }
 <p>The project followed the complete SOC lifecycle:</p>
 <h3>Workflow</h3>
 <ol>
-<li>**Ingest** — Loaded the controlled SSH dataset into the custom `MeridianLogs_CL` table.</li>
-<li>**Inspect** — Reviewed the raw fields and original authentication events.</li>
-<li>**Hunt** — Used KQL to extract source IP addresses, usernames and authentication outcomes.</li>
-<li>**Detect** — Created a scheduled rule for sources generating more than five failed SSH logins within a 10-minute window.</li>
-<li>**Alert** — Mapped source IPs as entities and generated separate Sentinel incidents.</li>
-<li>**Triage** — Investigated each incident to determine whether authentication succeeded and what occurred afterward.</li>
-<li>**Classify** — Closed two incidents as true positives and one as a benign positive.</li>
-<li>**Visualise** — Built a Sentinel workbook showing failed logins over time and the top source IPs.</li>
-<li>**Report** — Documented the evidence, MITRE ATT&amp;CK mappings, remediation and detection limitations.</li>
-<li>**Clean up** — Deleted the Azure resource group after preserving the project evidence.</li>
+<li>Ingest — Loaded the controlled SSH dataset into the custom `MeridianLogs_CL` table.</li>
+<li>Inspect — Reviewed the raw fields and original authentication events.</li>
+<li>Hunt — Used KQL to extract source IP addresses, usernames and authentication outcomes.</li>
+<li>Detect — Created a scheduled rule for sources generating more than five failed SSH logins within a 10-minute window.</li>
+<li>Alert — Mapped source IPs as entities and generated separate Sentinel incidents.</li>
+<li>Triage — Investigated each incident to determine whether authentication succeeded and what occurred afterward.</li>
+<li>Classify — Closed two incidents as true positives and one as a benign positive.</li>
+<li>Visualise — Built a Sentinel workbook showing failed logins over time and the top source IPs.</li>
+<li>Report — Documented the evidence, MITRE ATT&amp;CK mappings, remediation and detection limitations.</li>
+<li>Clean up — Deleted the Azure resource group after preserving the project evidence.</li>
 </ol>
 <h2>What I Built</h2>
 <ul>
