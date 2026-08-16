@@ -1,0 +1,28 @@
+// Investigate repeated authentication failures from an internal IP.
+// The query summarizes the account targeted, success/failure counts,
+// activity duration, and interval between attempts.
+// 
+// A consistent automated interval with no successful authentication
+// supports a benign misconfigured service rather than an active attacker.
+let BackupEvents =
+MeridianLogs_CL
+| where RawData has "10.20.14.9"
+| extend Username = extract(@"for (?:invalid user )?([^ ]+) from", 1, RawData)
+| extend Action = case(
+    RawData has "Accepted password", "SUCCESS",
+    RawData has "Failed password", "FAILED",
+    "OTHER"
+    )
+| order by EventTime_t asc
+| serialize
+| extend SecondsSincePrevious =
+    datetime_diff("second", EventTime_t, prev(EventTime_t));
+    BackupEvents
+| summarize
+    TotalAttempts = count(),
+    FailedAttempts = countif(Action == "FAILED"),
+    SuccessfulLogins = countif(Action == "SUCCESS"),
+    Accounts = make_set(Username),
+    FirstAttempt = min(EventTime_t),
+    LastAttempt = max(EventTime_t),
+    AverageIntervalSeconds = round(avg(todouble(SecondsSincePrevious)), 1)

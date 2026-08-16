@@ -1,0 +1,7 @@
+// Search for evidence of post-compromise access to the Linux password-hash file.
+// Access to /etc/shadow after a successful login increases the severity
+// because the file contains local account password hashes.
+MeridianLogs_CL
+| where RawData has "/etc/shadow"
+| project EventTime_t, Computer, RawData
+| order by EventTime_t asc

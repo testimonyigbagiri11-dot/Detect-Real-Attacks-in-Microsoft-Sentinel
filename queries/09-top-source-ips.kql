@@ -1,0 +1,9 @@
+// Rank source IP addresses by failed SSH authentication attempts.
+// This query powered the workbook chart showing which sources
+// generated the highest volume of failed logins.
+MeridianLogs_CL
+| where RawData has "Failed password"
+| extend SourceIP = extract(@"from ([0-9.]+)", 1, RawData)
+| where isnotempty(SourceIP)
+| summarize FailedAttempts = count() by SourceIP
+| sort by FailedAttempts desc

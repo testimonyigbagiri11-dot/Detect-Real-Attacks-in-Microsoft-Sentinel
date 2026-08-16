@@ -1,0 +1,12 @@
+// Investigate the external source IP associated with the confirmed compromise.
+// The query labels authentication outcomes and reconstructs the timeline
+// from repeated failures to a successful SSH login.
+MeridianLogs_CL
+| where RawData has "203.0.113.77"
+| extend Action = case(
+    RawData has "Accepted password", "SUCCESS",
+    RawData has "Failed password", "FAILED",
+    "OTHER"
+    )
+| project EventTime_t, Computer, Action, RawData
+| order by EventTime_t asc

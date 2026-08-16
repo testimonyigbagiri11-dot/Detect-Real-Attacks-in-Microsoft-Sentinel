@@ -1,7 +1,6 @@
 // Inspect the structure and contents of the imported SSH authentication logs.
 // TimeGenerated records when Azure ingested the event.
 // EventTime_t preserves the original timestamp from the source log.
-
 MeridianLogs_CL
 | project TimeGenerated, EventTime_t, Computer, RawData
 | take 50

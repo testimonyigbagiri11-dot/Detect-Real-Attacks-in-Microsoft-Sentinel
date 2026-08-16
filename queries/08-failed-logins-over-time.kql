@@ -1,0 +1,7 @@
+// Visualize failed SSH authentication activity over time.
+// Events are grouped into five-minute windows to reveal spikes
+// and concentrated periods of suspicious login activity.
+MeridianLogs_CL
+| where RawData has "Failed password"
+| summarize FailedLogins = count() by bin(EventTime_t, 5m)
+| order by EventTime_t asc

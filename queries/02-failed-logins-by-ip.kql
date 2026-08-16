@@ -1,0 +1,8 @@
+// Identify source IP addresses responsible for failed SSH logins.
+// The results are grouped and ranked by the number of failed attempts.
+MeridianLogs_CL
+| where RawData has "Failed password"
+| extend SourceIP = extract(@"from ([0-9.]+)", 1, RawData)
+| where isnotempty(SourceIP)
+| summarize FailedAttempts = count() by SourceIP
+| sort by FailedAttempts descs
