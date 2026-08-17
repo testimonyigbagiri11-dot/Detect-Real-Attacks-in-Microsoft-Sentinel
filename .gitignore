@@ -1,0 +1,22 @@
+# Raw datasets and logs
+*.log
+meridian_auth.log
+
+# Credentials and secrets
+*.key
+*.pem
+.env
+secrets/
+
+# Unredacted evidence
+unredacted/
+original-screenshots/
+
+# Creator-owned training materials
+WP05_Sentinel_SOC_Build_Guide*.pdf
+import_logs.py
+fallback_datatable.kql
+
+# Operating-system files
+Thumbs.db
+.DS_Store
